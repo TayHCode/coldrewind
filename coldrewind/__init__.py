@@ -1,0 +1,3 @@
+"""ColdRewind: local-first rewind button for AI agents."""
+
+__version__ = "0.1.0"

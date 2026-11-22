@@ -1,0 +1,19 @@
+[build-system]
+requires = ["setuptools==84.2.1"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "coldrewind"
+version = "0.1.0"
+description = "Local-first rewind button for AI agents"
+readme = "README.md"
+requires-python = ">=3.11"
+license = "MIT"
+license-files = ["LICENSE"]
+dependencies = []
+
+[project.scripts]
+coldrewind = "coldrewind.cli:main"
+
+[tool.setuptools]
+packages = ["coldrewind"]

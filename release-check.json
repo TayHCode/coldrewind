@@ -1,0 +1,58 @@
+{
+  "exclude": [
+    ".github/workflows/",
+    "docs/build-rules.md",
+    "docs/evidence/",
+    "docs/north-star.md",
+    "docs/v1-plan.md"
+  ],
+  "quickstart": [
+    {
+      "file": "README.md",
+      "line": 29,
+      "argv": [
+        "python",
+        "-m",
+        "pip",
+        "install",
+        "."
+      ]
+    },
+    {
+      "file": "README.md",
+      "line": 30,
+      "argv": [
+        "coldrewind",
+        "--version"
+      ]
+    }
+  ],
+  "checks": [
+    {
+      "role": "tests",
+      "argv": [
+        "python",
+        "-m",
+        "unittest",
+        "discover",
+        "-s",
+        "tests",
+        "-v"
+      ],
+      "timeout": 900
+    },
+    {
+      "role": "tests",
+      "argv": [
+        "python",
+        "-m",
+        "unittest",
+        "discover",
+        "-s",
+        "tests/installed",
+        "-v"
+      ],
+      "timeout": 900
+    }
+  ]
+}

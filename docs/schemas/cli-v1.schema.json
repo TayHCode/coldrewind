@@ -1,0 +1,275 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$defs": {
+    "error": {
+      "$anchor": "error",
+      "type": "object",
+      "required": ["schema_version", "reason", "message"],
+      "additionalProperties": false,
+      "properties": {
+        "schema_version": {"const": 1},
+        "reason": {
+          "enum": [
+            "ambiguous_restore",
+            "conflict",
+            "local_error",
+            "nothing_to_restore",
+            "pruned_snapshots",
+            "unregistered_workspace",
+            "usage"
+          ]
+        },
+        "message": {"type": "string"}
+      }
+    },
+    "step": {
+      "type": "object",
+      "required": [
+        "step_id",
+        "timestamp",
+        "agent",
+        "command",
+        "reversibility",
+        "reason",
+        "pre_snapshot_id",
+        "post_snapshot_id",
+        "changed_paths"
+      ],
+      "additionalProperties": false,
+      "properties": {
+        "step_id": {
+          "type": "integer",
+          "minimum": 1
+        },
+        "timestamp": {
+          "type": "string",
+          "format": "date-time"
+        },
+        "agent": {
+          "type": "string"
+        },
+        "command": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "reversibility": {
+          "enum": [
+            "reversible",
+            "partial",
+            "irreversible"
+          ]
+        },
+        "reason": {
+          "type": "string"
+        },
+        "pre_snapshot_id": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "post_snapshot_id": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "changed_paths": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        }
+      },
+      "$anchor": "step"
+    },
+    "init": {
+      "type": "object",
+      "required": [
+        "schema_version",
+        "updated"
+      ],
+      "additionalProperties": false,
+      "properties": {
+        "schema_version": {
+          "const": 1
+        },
+        "updated": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        }
+      },
+      "$anchor": "init"
+    },
+    "uninstall": {
+      "$ref": "#/$defs/init",
+      "$anchor": "uninstall"
+    },
+    "status": {
+      "type": "object",
+      "required": [
+        "schema_version",
+        "backend",
+        "last_capture_error"
+      ],
+      "additionalProperties": false,
+      "properties": {
+        "schema_version": {
+          "const": 1
+        },
+        "backend": {
+          "enum": [
+            null,
+            "portable",
+            "reflink",
+            "mixed",
+            "cached"
+          ]
+        },
+        "last_capture_error": {"type": ["string", "null"]}
+      },
+      "$anchor": "status"
+    },
+    "log": {
+      "type": "object",
+      "required": [
+        "schema_version",
+        "steps"
+      ],
+      "additionalProperties": false,
+      "properties": {
+        "schema_version": {
+          "const": 1
+        },
+        "steps": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/step"
+          }
+        }
+      },
+      "$anchor": "log"
+    },
+    "diff": {
+      "type": "object",
+      "required": [
+        "schema_version",
+        "added",
+        "deleted",
+        "modified",
+        "binary",
+        "git",
+        "patch"
+      ],
+      "additionalProperties": false,
+      "properties": {
+        "schema_version": {
+          "const": 1
+        },
+        "added": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "deleted": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "modified": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "binary": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "git": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "patch": {
+          "type": "string"
+        }
+      },
+      "$anchor": "diff"
+    },
+    "undo": {
+      "type": "object",
+      "required": [
+        "schema_version",
+        "step"
+      ],
+      "additionalProperties": false,
+      "properties": {
+        "schema_version": {
+          "const": 1
+        },
+        "step": {
+          "$ref": "#/$defs/step"
+        }
+      },
+      "$anchor": "undo"
+    },
+    "redo": {
+      "$ref": "#/$defs/undo",
+      "$anchor": "redo"
+    },
+    "prune": {
+      "type": "object",
+      "required": [
+        "schema_version",
+        "pruned",
+        "total_bytes",
+        "protected_bytes"
+      ],
+      "additionalProperties": false,
+      "properties": {
+        "schema_version": {
+          "const": 1
+        },
+        "total_bytes": {"type": "integer", "minimum": 0},
+        "protected_bytes": {"type": "integer", "minimum": 0},
+        "pruned": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        }
+      },
+      "$anchor": "prune"
+    },
+    "outbox": {
+      "type": "object",
+      "required": [
+        "schema_version",
+        "actions"
+      ],
+      "additionalProperties": false,
+      "properties": {
+        "schema_version": {
+          "const": 1
+        },
+        "actions": {
+          "type": "array",
+          "items": {
+            "type": "object"
+          }
+        }
+      },
+      "$anchor": "outbox"
+    }
+  }
+}
