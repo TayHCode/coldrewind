@@ -1,7 +1,8 @@
 # ColdRewind
 
 ColdRewind checkpoints local files and Git state around a command. Use its
-Claude Code, Codex or OpenCode hooks, or run a command with `coldrewind run --`.
+Claude Code, Codex, OpenCode, Cursor, Antigravity, or Gemini CLI hooks, or run
+a command with `coldrewind run --`.
 Inspect the changes, undo a captured step, and redo it when needed.
 
 - Zero third-party runtime dependencies (Python 3.11+ standard library)
@@ -45,24 +46,49 @@ edit. Run `coldrewind log` in the workspace to find the step ID, then run
 
 `init` registers the current directory and installs user-level hooks for the
 selected clients. The hooks apply across all registered workspaces for those
-clients. Both `init` and `uninstall` select all three clients by default.
-Repeat `--client` to select more than one.
+clients. Both `init` and `uninstall` select all six clients by default.
+Repeat `--client` to select more than one. Pass `--guard checkpoint|block|off`
+to `init` to pin a pre-tool guard mode in the installed hooks.
 
 | Client | Default path | Entries installed by `init` and removed by `uninstall` |
 | --- | --- | --- |
 | Claude Code (`claude`) | `~/.claude/settings.json` | One command handler each under `hooks.PreToolUse`, `hooks.PostToolUse`, `hooks.PostToolUseFailure`, and `hooks.PermissionDenied`. |
 | Codex (`codex`) | `~/.codex/hooks.json` | One command handler each under `hooks.PreToolUse` and `hooks.PostToolUse`. |
 | OpenCode (`opencode`) | `~/.config/opencode/plugins/coldrewind.js` | One plugin file that registers `tool.execute.before` and `tool.execute.after`. |
+| Cursor (`cursor`) | `~/.cursor/hooks.json` | One command entry each under `hooks.preToolUse`, `hooks.postToolUse`, and `hooks.postToolUseFailure` (with `version: 1`). |
+| Antigravity (`antigravity`) | `~/.gemini/config/hooks.json` | One named `coldrewind` hook spec with `PreToolUse` and `PostToolUse` matcher groups (`*`). |
+| Gemini CLI (`gemini`) | `~/.gemini/settings.json` | One matcher group (`*`) each under `hooks.BeforeTool` and `hooks.AfterTool` with millisecond timeouts. |
 
 When set to absolute paths, `CLAUDE_CONFIG_DIR` replaces `~/.claude`,
-`CODEX_HOME` replaces `~/.codex`, and `XDG_CONFIG_HOME` replaces `~/.config`.
+`CODEX_HOME` replaces `~/.codex`, `XDG_CONFIG_HOME` replaces `~/.config`,
+`CURSOR_CONFIG_DIR` replaces `~/.cursor`, `ANTIGRAVITY_CONFIG_DIR` replaces
+`~/.gemini/config`, and `GEMINI_CONFIG_DIR` replaces `~/.gemini`.
 
-Claude Code and Codex keep other settings and handlers. ColdRewind matches its
+JSON-configured clients keep other settings and handlers. ColdRewind matches its
 command handlers by the exact command for the current installation. Before
 changing an existing JSON file, it saves a sibling copy named
 `<filename>.coldrewind-backup-<UTC timestamp>`. For OpenCode, ColdRewind
 removes the plugin only if its contents match what the current installation
 generates. It refuses to replace or remove a different file at that path.
+
+## Destructive command guard
+
+Pre-tool hooks classify destructive workspace commands (`git reset --hard`,
+`git reset --merge`, `git clean -f*`, `git checkout --`, `git checkout .`,
+`git checkout -f`, `git restore` on the worktree, `git stash drop/clear`,
+`rm -rf` targeting the workspace, `find -delete`) and irreversible/partial-capture
+commands (privileged wrappers like `sudo`, `git push`, `git send-email`):
+
+- `checkpoint` (default): force-checkpoints immediately before execution
+  (bypassing `COLDREWIND_SNAPSHOT_MIN_INTERVAL_SECONDS` throttling) and **fails
+  closed** (blocks the tool) if the force-checkpoint fails. Unrecoverable
+  recursive deletions of the workspace root, an ancestor directory, or `.git`
+  are always denied because they cannot be undone.
+- `block`: blocks classified commands before execution without leaving pending
+  markers behind.
+- `off`: disables guard blocking and falls back to fail-open capture.
+
+Configure via `COLDREWIND_GUARD=checkpoint|block|off` or `--guard` on `init` / `hook`.
 
 From any directory, remove Claude Code's hooks with the following command.
 

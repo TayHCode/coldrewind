@@ -92,7 +92,7 @@ def prune_locked(store: Path, *, keep: frozenset[str] = frozenset(), report: boo
         elif path.suffix == ".backend":
             backend_sizes[snapshot_id] = path.lstat().st_size
     old_tally = _read_tally(store / TALLY)
-    tally, restatted = _count_blobs(blobs, old_tally) if blobs.exists() else ({}, 0)
+    tally, restatted, unlisted = _count_blobs(blobs, old_tally) if blobs.exists() else ({}, 0, 0)
     _save_tally(store, tally, restatted)
     blob_sizes = {digest: size for digest, (_, size) in tally.items()}
     database = store / "timeline.sqlite3"
@@ -108,7 +108,7 @@ def prune_locked(store: Path, *, keep: frozenset[str] = frozenset(), report: boo
     if snapshots.exists():
         directories["snapshots"] = _stored_bytes(snapshots, sizes)
     if blobs.exists():
-        directories["blobs"] = _stored_bytes(blobs, blob_sizes)
+        directories["blobs"] = sum(blob_sizes.values()) + unlisted
     total = _stored_bytes(store, directories)
     if not report and total <= cap and all(st.st_mtime >= cutoff for st in stats.values()):
         return PruneResult([], total, None)
@@ -170,20 +170,27 @@ def prune_locked(store: Path, *, keep: frozenset[str] = frozenset(), report: boo
 
 def _count_blobs(
     blobs: Path, old_tally: dict[str, list[int]]
-) -> tuple[dict[str, list[int]], int]:
+) -> tuple[dict[str, list[int]], int, int]:
     tally = {}
     restatted = 0
+    unlisted = 0
+    is_digest = snapshot.DIGEST.fullmatch
     with os.scandir(blobs) as entries:
         for entry in entries:
-            if not entry.is_file(follow_symlinks=False) or not snapshot.is_digest(entry.name):
+            name = entry.name
+            if not entry.is_file(follow_symlinks=False) or not is_digest(name):
+                if entry.is_dir(follow_symlinks=False):
+                    unlisted += _stored_bytes(Path(entry.path))
+                else:
+                    unlisted += entry.stat(follow_symlinks=False).st_size
                 continue
-            known = old_tally.get(entry.name)
+            known = old_tally.get(name)
             if known is not None and known[0] == entry.inode():
-                tally[entry.name] = known
+                tally[name] = known
             else:
-                tally[entry.name] = [entry.inode(), entry.stat(follow_symlinks=False).st_size]
+                tally[name] = [entry.inode(), entry.stat(follow_symlinks=False).st_size]
                 restatted += 1
-    return tally, restatted
+    return tally, restatted, unlisted
 
 
 def _read_tally(path: Path) -> dict[str, list[int]]:
@@ -201,9 +208,12 @@ def _read_tally(path: Path) -> dict[str, list[int]]:
     return {
         digest: entry
         for digest, entry in data.items()
-        if isinstance(entry, list)
+        if type(entry) is list
         and len(entry) == 2
-        and all(type(value) is int and value >= 0 for value in entry)
+        and type(entry[0]) is int
+        and type(entry[1]) is int
+        and entry[0] >= 0
+        and entry[1] >= 0
     }
 
 

@@ -9,7 +9,7 @@ import sys
 from dataclasses import asdict
 from pathlib import Path
 
-from coldrewind import __version__, hooks, init_cmd, restore, retention, snapshot
+from coldrewind import __version__, guard, hooks, init_cmd, restore, retention, snapshot
 from coldrewind.config import Registry
 from coldrewind.diff import diff
 from coldrewind.ledger import read_steps
@@ -63,6 +63,10 @@ def build_parser(*, json_errors: bool = False) -> argparse.ArgumentParser:
     hook_parser = commands.add_parser("hook", help="Record one agent hook event from stdin")
     hook_parser.add_argument("client", choices=tuple(hooks.AGENTS))
     hook_parser.add_argument("phase", choices=hooks.PHASES)
+    hook_parser.add_argument(
+        "--guard", choices=guard.MODES, default=None,
+        help="destructive/irreversible command guard mode (default: COLDREWIND_GUARD or checkpoint)",
+    )
 
     for name, help_text in JSON_COMMANDS:
         command = commands.add_parser(name, help=help_text)
@@ -71,6 +75,11 @@ def build_parser(*, json_errors: bool = False) -> argparse.ArgumentParser:
             command.add_argument(
                 "--client", action="append", choices=tuple(hooks.AGENTS), dest="clients",
                 help="client to change (repeatable; default: all)",
+            )
+        if name == "init":
+            command.add_argument(
+                "--guard", choices=guard.MODES, default=None,
+                help="pin guard mode in installed hooks (checkpoint, block, or off)",
             )
         if name in ("diff", "undo", "redo"):
             command.add_argument("step", type=int, nargs=None if name == "diff" else "?")
@@ -183,12 +192,12 @@ def main(argv: list[str] | None = None) -> int:
         if name == "run":
             return run(registry, tuple(args.command[1:]))
         if name == "hook":
-            return hooks.main(registry, args.client, args.phase, sys.stdin)
+            return hooks.main(registry, args.client, args.phase, sys.stdin, guard_mode=args.guard)
         cwd = Path.cwd()
         if name in ("init", "uninstall"):
             clients = tuple(args.clients or hooks.AGENTS)
             changed = (
-                init_cmd.init(registry, Path.home(), cwd, clients)
+                init_cmd.init(registry, Path.home(), cwd, clients, guard_mode=args.guard)
                 if name == "init" else init_cmd.uninstall(Path.home(), clients)
             )
             _print(args, {"updated": [str(path) for path in changed]}, [f"updated {path}" for path in changed])

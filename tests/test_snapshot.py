@@ -1,4 +1,5 @@
 import hashlib
+import json
 import os
 import sqlite3
 import statistics
@@ -250,6 +251,25 @@ class TestSnapshot(SnapshotTestCase):
         sha = manifest["files"]["same.txt"]["sha256"]
         self.assertEqual((self.blobs / sha).read_bytes(), b"bbbb\n")
 
+    def test_malformed_stat_cache_entries_are_rehashed(self) -> None:
+        contents = {name: f"{name} body\n".encode() for name in ("a", "b", "c", "d")}
+        for name, body in contents.items():
+            (self.repo / name).write_bytes(body)
+        self.take()
+        (self.blobs / ".tmp-poison").write_bytes(b"poison")
+        keys = {name: snapshot._key((self.repo / name).lstat()) for name in contents}
+        poisoned = {
+            "a": [*keys["a"], ".tmp-poison"],
+            "b": [*keys["b"], ["unhashable"]],
+            "c": keys["c"],
+            "d": "not a list",
+        }
+        (self.store / "stat-cache.json").write_text(json.dumps(poisoned))
+
+        _, manifest = self.take()
+        for name, body in contents.items():
+            self.assertEqual(manifest["files"][name]["sha256"], hashlib.sha256(body).hexdigest())
+
     def test_racy_clean_file_is_rehashed_until_outside_the_window(self) -> None:
         path = self.repo / "fresh.txt"
         path.write_text("fresh\n")
@@ -298,6 +318,23 @@ class TestSnapshot(SnapshotTestCase):
         self.assertEqual(len(calls), 2)
         wal = manifest["files"]["app.db-wal"]
         self.assertEqual((self.blobs / wal["sha256"]).read_bytes(), b"committed txn")
+
+    def test_same_name_in_other_directory_changed_after_scan_is_rehashed(self) -> None:
+        for name in ("first", "second"):
+            directory = self.repo / name
+            directory.mkdir()
+            (directory / "file").write_bytes(b"before")
+        target = self.repo / "second" / "file"
+        capture_git = snapshot._capture_git
+
+        def edit_after_scan(*args):
+            if target.read_bytes() == b"before":
+                target.write_bytes(b"edited")
+            return capture_git(*args)
+
+        with patch.object(snapshot, "_capture_git", side_effect=edit_after_scan):
+            _, manifest = self.take()
+        self.assertEqual(restored_entries(self.blobs, manifest), live_entries(self.repo))
 
     def test_shared_index_appearing_during_capture_triggers_rescan(self) -> None:
         real_capture = snapshot._capture_git

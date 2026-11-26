@@ -370,7 +370,7 @@ else:
     def test_installed_lifecycle(self):
         self.assertEqual(self.cli("--version").stdout, f"coldrewind {VERSION}\n")
         updated = self.as_json("init")["updated"]
-        self.assertEqual(len(updated), 3)
+        self.assertEqual(len(updated), 6)
         self.assertTrue(all(Path(path).is_file() for path in updated))
         status = self.as_json("status")
         self.assertIsNone(status["backend"])
@@ -558,3 +558,62 @@ else:
         self.cli("redo", "--json", code=1)
         self.as_json("redo", "--force")
         self.assertEqual((self.root / "note").read_text(), "two\n")
+
+    def test_installed_guard_and_new_clients_end_to_end(self):
+        self.launch(["git", "config", "user.name", "Lab Fixture"]).check_returncode()
+        self.launch(["git", "config", "user.email", "fixture"]).check_returncode()
+        note = self.root / "note.txt"
+        note.write_text("committed\n")
+        self.launch(["git", "add", "note.txt"]).check_returncode()
+        self.launch(["git", "commit", "-qm", "base"]).check_returncode()
+
+        self.as_json("init", "--client", "cursor", "--client", "antigravity", "--client", "gemini")
+        # Baseline snapshot, then edit uncommitted work under an aggressive throttle.
+        self.write_step("baseline")
+        note.write_text("precious uncommitted\n")
+        (self.root / "untracked.txt").write_text("do not lose\n")
+        self.env["COLDREWIND_SNAPSHOT_MIN_INTERVAL_SECONDS"] = "3600"
+
+        cursor_cfg = json.loads((self.home / ".cursor/hooks.json").read_text())
+        cursor_pre = shlex.split(cursor_cfg["hooks"]["preToolUse"][0]["command"])
+        cursor_post = shlex.split(cursor_cfg["hooks"]["postToolUse"][0]["command"])
+        event = json.dumps({
+            "cwd": str(self.root), "conversation_id": "conv", "tool_use_id": "wipe-1",
+            "tool_name": "Shell", "tool_input": {"command": "git reset --hard && git clean -fdx"},
+        })
+        pre = self.launch(cursor_pre, stdin=event)
+        self.assertEqual((pre.returncode, pre.stderr), (0, ""))
+        self.assertEqual(json.loads(pre.stdout), {"permission": "allow"})
+
+        self.launch(["bash", "-c", "git reset --hard && git clean -fdx"]).check_returncode()
+        self.assertEqual(note.read_text(), "committed\n")
+        self.assertFalse((self.root / "untracked.txt").exists())
+
+        post = self.launch(cursor_post, stdin=event)
+        self.assertEqual((post.returncode, post.stderr), (0, ""))
+
+        self.as_json("undo")
+        self.assertEqual(note.read_text(), "precious uncommitted\n")
+        self.assertEqual((self.root / "untracked.txt").read_text(), "do not lose\n")
+
+        # Strict block mode denies via Antigravity (exit 0 + decision=deny) and Gemini CLI (exit 2 + decision=deny).
+        self.env["COLDREWIND_GUARD"] = "block"
+        ag_cfg = json.loads((self.home / ".gemini/config/hooks.json").read_text())
+        ag_pre = shlex.split(ag_cfg["coldrewind"]["PreToolUse"][0]["hooks"][0]["command"])
+        ag_res = self.launch(ag_pre, stdin=json.dumps({
+            "cwd": str(self.root), "conversationId": "c-ag",
+            "toolCall": {"id": "t1", "name": "run_command", "args": {"CommandLine": "rm -rf ."}},
+        }))
+        self.assertEqual(ag_res.returncode, 0)
+        self.assertEqual(json.loads(ag_res.stdout)["decision"], "deny")
+
+        gem_cfg = json.loads((self.home / ".gemini/settings.json").read_text())
+        gem_pre = shlex.split(gem_cfg["hooks"]["BeforeTool"][0]["hooks"][0]["command"])
+        gem_res = self.launch(gem_pre, stdin=json.dumps({
+            "cwd": str(self.root), "session_id": "s-gem",
+            "tool_name": "run_shell_command", "tool_input": {"command": "git checkout -- ."},
+        }))
+        self.assertEqual(gem_res.returncode, 2)
+        self.assertEqual(json.loads(gem_res.stdout)["decision"], "deny")
+
+        self.as_json("uninstall", "--client", "cursor", "--client", "antigravity", "--client", "gemini")

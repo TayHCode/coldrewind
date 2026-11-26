@@ -4,7 +4,7 @@ The inspection and restore commands use the nearest registered workspace that co
 
 | Command | Success output with `--json` |
 |---|---|
-| `init [--client CLIENT]` | [Updated hook configuration paths](schemas/cli-v1.schema.json#init). Registers the current directory. |
+| `init [--client CLIENT] [--guard MODE]` | [Updated hook configuration paths](schemas/cli-v1.schema.json#init). Registers the current directory. |
 | `uninstall [--client CLIENT]` | [Updated hook configuration paths](schemas/cli-v1.schema.json#uninstall). Removes user-level hooks for the selected clients and keeps the registry and timeline. |
 | `status` | [Backend of the latest snapshot](schemas/cli-v1.schema.json#status), and the last recorded capture error for this workspace. Each field can be `null`. Capture errors are summaries and remain visible after subsequent successful captures. |
 | `log` | [Redacted steps](schemas/cli-v1.schema.json#log) in ascending step ID order. |
@@ -45,7 +45,7 @@ If two saves collide during rollback, the latest save stays at its path. The con
 
 `run -- COMMAND [ARG ...]` forwards the child's streams. It returns the child's exit code, or `128 + signal number` if a signal killed it. Errors before launch exit `2`. Capture errors after launch go to stderr and preserve the child's status.
 
-`hook CLIENT PHASE` reads one JSON event on stdin. It exits `0` even if processing fails, reporting the failure on stderr so it does not block the agent. Invalid CLI arguments exit `2`. The `run` and `hook` interfaces use their own stream contracts.
+`hook CLIENT PHASE [--guard MODE]` reads one JSON event on stdin for `claude`, `codex`, `opencode`, `cursor`, `antigravity`, or `gemini`. For non-guarded commands it exits `0` even if processing fails, reporting the failure on stderr so it does not block the agent. For destructive or irreversible/partial-capture commands during `pre`, the guard defaults to `checkpoint` (force-checkpoint immediately, bypassing `COLDREWIND_SNAPSHOT_MIN_INTERVAL_SECONDS`, fail closed if checkpointing fails, and always deny unrecoverable recursive deletions of the workspace root, an ancestor directory, or `.git`), supports `block` (deny before execution), and supports `off` (fail-open). Override via `COLDREWIND_GUARD` or `--guard`. Blocked calls emit each client's native deny response (`permissionDecision: "deny"` + exit `2` for Claude Code, exit `2` for Codex/OpenCode, `permission: "deny"` + exit `2` for Cursor, `decision: "deny"` + exit `2` for Gemini CLI, `decision: "deny"` + exit `0` for Antigravity). Invalid CLI arguments exit `2`. The `run` and `hook` interfaces use their own stream contracts.
 
 ## Verify the installed CLI
 

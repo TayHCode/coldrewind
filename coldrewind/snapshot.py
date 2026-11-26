@@ -45,7 +45,7 @@ def take(registry: Registry, root: Path, *, keep: frozenset[str] = frozenset()) 
         return snapshot_id
 
 
-def read_marker(marker: Path) -> str | None:
+def read_marker(marker: Path, *, reap: bool = False) -> str | None:
     try:
         fd = os.open(marker, os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK)
     except FileNotFoundError:
@@ -60,8 +60,12 @@ def read_marker(marker: Path) -> str | None:
             except BlockingIOError:
                 pass
             else:
+                if reap:
+                    marker.unlink(missing_ok=True)
                 return None
         elif info.st_mtime < time.time() - retention.MAX_AGE_SECONDS:
+            if reap:
+                marker.unlink(missing_ok=True)
             return None
         value = os.read(fd, 65).decode("ascii", "replace")
     finally:
@@ -103,31 +107,46 @@ def pending_markers(store: Path, *, reap: bool = False) -> dict[str, str]:
     if not pending.exists():
         return {}
     active = {}
+    cutoff = time.time() - retention.MAX_AGE_SECONDS
     for marker in pending.iterdir():
         prefix, _, nonce = marker.name.partition(".")
         if not (HOOK_MARKER.fullmatch(marker.name) or
                 (prefix == "run" and re.fullmatch("[0-9a-f]{32}", nonce))):
+            if reap and re.fullmatch(r"(?:tmp|\.tmp-)[a-z0-9_]{8}", marker.name):
+                info = marker.lstat()
+                if stat.S_ISREG(info.st_mode) and info.st_mtime < cutoff:
+                    marker.unlink(missing_ok=True)
             continue
         try:
-            snapshot_id = read_marker(marker)
+            snapshot_id = read_marker(marker, reap=reap)
         except (OSError, ValueError):
             continue
         if snapshot_id is not None:
             active[marker.name] = snapshot_id
-        elif reap and (prefix == "run" or marker.lstat().st_mtime < time.time() - retention.MAX_AGE_SECONDS):
-            marker.unlink(missing_ok=True)
     return active
 
 
 def pending_ids(store: Path) -> frozenset[str]:
-    return frozenset(pending_markers(store, reap=True).values())
+    return frozenset(pending_markers(store).values())
 
 
 def start_capture_locked(store: Path, key: str, snapshot_id: str) -> Path:
     pending = pending_directory(store)
     marker = pending / f"{key}.{uuid.uuid4().hex}"
     record_overlap_locked(store, marker.name, tuple(pending_markers(store)))
-    _write(pending, marker, snapshot_id.encode("ascii"))
+    try:
+        _write(pending, marker, snapshot_id.encode("ascii"))
+    except BaseException:
+        try:
+            marker.unlink(missing_ok=True)
+        except OSError:
+            pass
+        try:
+            from .ledger import discard_denied_overlaps_locked
+            discard_denied_overlaps_locked(store, marker.name)
+        except (OSError, ValueError, sqlite3.Error):
+            pass
+        raise
     return marker
 
 
@@ -146,13 +165,14 @@ def take_locked(store: Path, root: Path, *, exclude: str | None = None) -> str:
     for _ in range(SCAN_ATTEMPTS):
         captures: set[str] = set()
         try:
-            files, new_cache, keys = _scan(root, blobs, old_cache, captures, exclude)
+            files, new_cache, directories, leaves = _scan(root, blobs, old_cache, captures, exclude)
             git, git_keys = _capture_git(root, blobs, captures)
         except FileNotFoundError:
             continue
-        if all(_stat_key(path) == key for path, key in (keys | git_keys).items()) and set(
-            git_files(root)
-        ) == set(git):
+        if (_verify_leaves(leaves)
+                and all(_stat_key(path) == key for path, key in directories.items())
+                and all(_stat_key(path) == key for path, key in git_keys.items())
+                and set(git_files(root)) == set(git)):
             break
     else:
         raise RuntimeError("workspace kept changing during the snapshot")
@@ -178,40 +198,66 @@ def take_locked(store: Path, root: Path, *, exclude: str | None = None) -> str:
 
 def _scan(
     root: Path, blobs: Path, old_cache: dict[str, list], captures: set[str], exclude: str | None = None
-) -> tuple[dict, dict, dict]:
-    stored = set(os.listdir(blobs))
-    started = time.time_ns()
+) -> tuple[dict, dict, dict, dict]:
+    stored = {name for name in os.listdir(blobs) if DIGEST.fullmatch(name)}
+    racy = time.time_ns() - RACY_WINDOW_NS
     files: dict[str, dict] = {}
     new_cache: dict[str, list] = {}
-    keys: dict[str, list] = {str(root): _key(os.lstat(root))}
+    top = str(root)
+    directories = {top: _key(os.lstat(root))}
+    leaves = {}
+    lstat = os.lstat
+    cached = old_cache.get
+    is_file, is_dir, is_link = stat.S_ISREG, stat.S_ISDIR, stat.S_ISLNK
     for dirpath, dirnames, filenames, dirfd in os.fwalk(root, onerror=_raise):
-        dirnames[:] = [name for name in dirnames if name != ".git" and not (dirpath == str(root) and name == exclude)]
-        prefix = os.path.relpath(dirpath, root).replace(os.sep, "/")
+        is_top = dirpath == top
+        dirnames[:] = [name for name in dirnames if name != ".git" and not (is_top and name == exclude)]
+        prefix = "" if is_top else os.path.relpath(dirpath, root).replace(os.sep, "/") + "/"
         bytecode = os.path.basename(dirpath) == "__pycache__"
+        entries = leaves[dirpath] = []
         for name in (*dirnames, *filenames):
-            rel = name if prefix == "." else f"{prefix}/{name}"
-            st = os.stat(name, dir_fd=dirfd, follow_symlinks=False)
-            if stat.S_ISLNK(st.st_mode):
-                files[rel] = {"type": "symlink", "target": os.readlink(name, dir_fd=dirfd)}
-            elif stat.S_ISDIR(st.st_mode):
-                keys[f"{root}/{rel}"] = _key(st)
-                files[rel] = {"type": "dir", "mode": stat.S_IMODE(st.st_mode)}
-            elif stat.S_ISREG(st.st_mode):
+            st = lstat(name, dir_fd=dirfd)
+            mode = st.st_mode
+            rel = prefix + name
+            if is_file(mode):
                 if bytecode and name.endswith(".pyc"):
                     continue
-                key = _key(st)
-                keys[f"{root}/{rel}"] = key
-                hit = old_cache.get(rel)
-                if hit is not None and hit[:4] == key and hit[4] in stored:
+                key = [st.st_size, st.st_mtime_ns, st.st_ctime_ns, st.st_ino]
+                entries.append((name, key))
+                hit = cached(rel)
+                if (type(hit) is list and len(hit) == 5 and hit[:4] == key
+                        and type(hit[4]) is str and hit[4] in stored):
                     digest = hit[4]
                     new_cache[rel] = hit
                 else:
                     fd = os.open(name, os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK, dir_fd=dirfd)
                     digest, stable = _store_fd(blobs, fd, key, captures)
-                    if stable and st.st_ctime_ns < started - RACY_WINDOW_NS:
+                    if stable and st.st_ctime_ns < racy:
                         new_cache[rel] = [*key, digest]
-                files[rel] = {"type": "file", "mode": stat.S_IMODE(st.st_mode), "sha256": digest}
-    return files, new_cache, keys
+                files[rel] = {"type": "file", "mode": mode & 0o7777, "sha256": digest}
+            elif is_dir(mode):
+                directories[os.path.join(dirpath, name)] = _key(st)
+                files[rel] = {"type": "dir", "mode": mode & 0o7777}
+            elif is_link(mode):
+                files[rel] = {"type": "symlink", "target": os.readlink(name, dir_fd=dirfd)}
+    return files, new_cache, directories, leaves
+
+
+def _verify_leaves(leaves: dict) -> bool:
+    lstat = os.lstat
+    try:
+        for directory, entries in leaves.items():
+            fd = os.open(directory, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW)
+            try:
+                for name, key in entries:
+                    st = lstat(name, dir_fd=fd)
+                    if [st.st_size, st.st_mtime_ns, st.st_ctime_ns, st.st_ino] != key:
+                        return False
+            finally:
+                os.close(fd)
+    except (FileNotFoundError, NotADirectoryError):
+        return False
+    return True
 
 
 def _capture_git(root: Path, blobs: Path, captures: set[str]) -> tuple[dict, dict]:
@@ -314,18 +360,34 @@ def latest_backend(registry: Registry, root: Path) -> str | None:
         return read_backend(registry, root, latest.stem) if latest is not None else None
 
 
+def recent_snapshot_locked(store: Path, max_age_seconds: int) -> str | None:
+    if max_age_seconds <= 0:
+        return None
+    snapshots = store / "snapshots"
+    if snapshots.is_symlink() or not snapshots.is_dir():
+        return None
+    cutoff = time.time() - max_age_seconds
+    newest_id: str | None = None
+    newest_mtime = -1.0
+    for path in snapshots.glob("*.json"):
+        if not is_digest(path.stem):
+            continue
+        try:
+            info = path.lstat()
+        except OSError:
+            continue
+        if stat.S_ISREG(info.st_mode) and info.st_mtime >= cutoff and info.st_mtime > newest_mtime:
+            newest_id = path.stem
+            newest_mtime = info.st_mtime
+    return newest_id
+
+
 def _read_cache(path: Path) -> dict[str, list]:
     try:
         data = json.loads(path.read_bytes())
     except (FileNotFoundError, ValueError):
         return {}
-    if not isinstance(data, dict):
-        return {}
-    return {
-        rel: entry
-        for rel, entry in data.items()
-        if isinstance(entry, list) and len(entry) == 5 and is_digest(entry[4])
-    }
+    return data if isinstance(data, dict) else {}
 
 
 def _store_fd(blobs: Path, fd: int, key: list | None, captures: set[str]) -> tuple[str, bool]:

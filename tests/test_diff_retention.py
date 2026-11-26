@@ -350,13 +350,24 @@ class RetentionTest(Workspace):
 
     def assert_tally_matches_recount(self) -> None:
         blobs = self.store / "blobs"
-        tally, _ = retention._count_blobs(blobs, retention._read_tally(self.store / retention.TALLY))
+        tally, *_ = retention._count_blobs(blobs, retention._read_tally(self.store / retention.TALLY))
         recount = {
             path.name: path.lstat().st_size
             for path in blobs.iterdir()
             if snapshot.is_digest(path.name)
         }
         self.assertEqual({digest: size for digest, (_, size) in tally.items()}, recount)
+
+    def test_store_total_counts_unlisted_blob_entries(self) -> None:
+        self.mutate(1)
+        blobs = self.store / "blobs"
+        (blobs / ".tmp-leftover").write_bytes(b"x" * 4096)
+        (blobs / "nested").mkdir()
+        (blobs / "nested" / "inner").write_bytes(b"y" * 8192)
+        with self.registry.workspace_lock(self.root) as store:
+            total = retention.prune_locked(store).total_bytes
+        measured = sum(path.lstat().st_size for path in self.store.rglob("*") if not path.is_dir())
+        self.assertEqual(total, measured)
 
     @patch.object(retention, "TALLY_SLACK", 1)
     def test_blob_tally_matches_a_full_recount(self) -> None:

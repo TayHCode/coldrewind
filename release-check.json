@@ -9,7 +9,7 @@
   "quickstart": [
     {
       "file": "README.md",
-      "line": 29,
+      "line": 30,
       "argv": [
         "python",
         "-m",
@@ -20,7 +20,7 @@
     },
     {
       "file": "README.md",
-      "line": 30,
+      "line": 31,
       "argv": [
         "coldrewind",
         "--version"
