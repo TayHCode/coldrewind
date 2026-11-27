@@ -118,7 +118,7 @@ class TestHooks(unittest.TestCase):
         self.assertEqual((result.returncode, result.stderr), (0, ""))
 
     def test_init_preserves_foreign_hooks_and_backs_up(self) -> None:
-        result = self.cli("init")
+        result = self.cli("init", "--yes")
         self.assertEqual(result.returncode, 0, result.stderr)
         self.assertEqual(self.registry.roots(), (self.root,))
 
@@ -137,13 +137,13 @@ class TestHooks(unittest.TestCase):
         for needle in ('"tool.execute.before"', '"tool.execute.after"', "input.callID", json.dumps(sys.executable)):
             self.assertIn(needle, plugin)
 
-        self.assertEqual(self.cli("init").returncode, 0)
+        self.assertEqual(self.cli("init", "--yes").returncode, 0)
         for path in (self.claude, self.codex):
             for event in ("PreToolUse", "PostToolUse"):
                 self.assertEqual(len(self.installed(path, event)), 1)
 
     def test_three_clients_and_run_share_one_chronological_timeline(self) -> None:
-        self.assertEqual(self.cli("init").returncode, 0)
+        self.assertEqual(self.cli("init", "--yes").returncode, 0)
         notes = self.root / "notes.txt"
         edits = (
             ("claude", {"tool_name": "Write", "tool_input": {"file_path": str(notes)}}, "v1"),
@@ -180,7 +180,7 @@ class TestHooks(unittest.TestCase):
         self.assertEqual(list((self.registry.store_path(self.root) / "pending").iterdir()), [])
 
     def test_hook_never_blocks_the_agent(self) -> None:
-        self.assertEqual(self.cli("init").returncode, 0)
+        self.assertEqual(self.cli("init", "--yes").returncode, 0)
         outside = self.home / "elsewhere"
         outside.mkdir()
         payload = {"session_id": "s", "tool_use_id": "t", "cwd": str(outside), "tool_name": "Write"}
@@ -191,7 +191,7 @@ class TestHooks(unittest.TestCase):
         self.assertEqual(read_steps(self.registry, self.root), [])
 
     def test_post_without_pre_records_unrestorable_step(self) -> None:
-        self.assertEqual(self.cli("init").returncode, 0)
+        self.assertEqual(self.cli("init", "--yes").returncode, 0)
         payload = {"session_id": "s", "tool_use_id": "t", "cwd": str(self.root), "tool_name": "Write"}
         self.fire("codex", "post", payload)
         step, = read_steps(self.registry, self.root)
@@ -240,7 +240,7 @@ class TestHooks(unittest.TestCase):
 
     def test_uninstall_removes_only_coldrewind_entries(self) -> None:
         before = tree(self.root)
-        self.assertEqual(self.cli("init").returncode, 0)
+        self.assertEqual(self.cli("init", "--yes").returncode, 0)
         settings = json.loads(self.claude.read_text())
         settings["hooks"]["PostToolUse"].append({"hooks": [{"type": "command", "command": "later.sh"}]})
         self.claude.write_text(json.dumps(settings))
@@ -260,7 +260,7 @@ class TestHooks(unittest.TestCase):
         self.assertEqual(self.cli("uninstall").stdout, "")
 
     def test_cursor_antigravity_and_gemini_init_capture_and_uninstall(self) -> None:
-        self.assertEqual(self.cli("init").returncode, 0)
+        self.assertEqual(self.cli("init", "--yes").returncode, 0)
 
         # Verify each client's real config schema and preservation of foreign hooks.
         cursor_data = json.loads(self.cursor.read_text())
@@ -368,7 +368,7 @@ class TestHooks(unittest.TestCase):
             ANTIGRAVITY_CONFIG_DIR=str(custom_ag),
             GEMINI_CONFIG_DIR=str(custom_gem),
         )
-        res = self.cli("init", "--client", "cursor", "--client", "antigravity", "--client", "gemini")
+        res = self.cli("init", "--yes", "--client", "cursor", "--client", "antigravity", "--client", "gemini")
         self.assertEqual(res.returncode, 0, res.stderr)
         self.assertTrue((custom_cursor / "hooks.json").is_file())
         self.assertTrue((custom_ag / "hooks.json").is_file())
@@ -380,7 +380,7 @@ class TestHooks(unittest.TestCase):
         # Malformed Cursor version refuses without modifying any config.
         (custom_cursor / "hooks.json").write_text(json.dumps({"version": "bad", "hooks": {}}))
         ag_before = (custom_ag / "hooks.json").read_bytes()
-        bad = self.cli("init", "--client", "cursor", "--client", "antigravity")
+        bad = self.cli("init", "--yes", "--client", "cursor", "--client", "antigravity")
         self.assertEqual(bad.returncode, 2)
         self.assertIn("expected integer 'version'", bad.stderr)
         self.assertEqual((custom_ag / "hooks.json").read_bytes(), ag_before)
@@ -388,7 +388,7 @@ class TestHooks(unittest.TestCase):
     def test_init_refuses_malformed_config_without_writing(self) -> None:
         self.codex.write_text(json.dumps({"hooks": {"PreToolUse": {"not": "a list"}}}))
         claude_before = self.claude.read_bytes()
-        result = self.cli("init")
+        result = self.cli("init", "--yes")
         self.assertEqual(result.returncode, 2)
         self.assertIn("malformed PreToolUse", result.stderr)
         self.assertEqual(self.claude.read_bytes(), claude_before)
@@ -404,7 +404,7 @@ class TestHooks(unittest.TestCase):
         self.assertEqual(len(self.installed(real, "PreToolUse")), 1)
 
     def test_workspace_module_cannot_shadow_the_hook(self) -> None:
-        self.assertEqual(self.cli("init").returncode, 0)
+        self.assertEqual(self.cli("init", "--yes").returncode, 0)
         shadow = self.root / "coldrewind"
         shadow.mkdir()
         (shadow / "__init__.py").write_text("raise SystemExit(2)\n")
@@ -418,7 +418,7 @@ class TestHooks(unittest.TestCase):
     def test_lookalike_or_symlinked_opencode_plugin_is_left_alone(self) -> None:
         plugin = self.plugins / "coldrewind.js"
         plugin.write_text("// -P -m coldrewind.cli hook opencode\nexport const Mine = async () => ({})\n")
-        result = self.cli("init")
+        result = self.cli("init", "--yes")
         self.assertEqual(result.returncode, 2)
         self.assertIn("is not this ColdRewind's plugin", result.stderr)
         self.assertEqual(self.cli("uninstall", "--client", "opencode").returncode, 2)
@@ -492,7 +492,7 @@ class TestHooks(unittest.TestCase):
         self.assertEqual(backup.read_bytes(), raw)
 
     def test_non_regular_marker_does_not_hang_post(self) -> None:
-        self.assertEqual(self.cli("init").returncode, 0)
+        self.assertEqual(self.cli("init", "--yes").returncode, 0)
         payload = {"session_id": "s", "tool_use_id": "t", "cwd": str(self.root), "tool_name": "Write"}
         self.fire("claude", "pre", payload)
         marker, = (self.registry.store_path(self.root) / "pending").iterdir()
@@ -552,6 +552,297 @@ class TestHooks(unittest.TestCase):
                 hooks.main(self.registry, "claude", "pre", io.StringIO(json.dumps(payload))), 0
             )
         self.assertEqual(list((store / "pending").iterdir()), [])
+
+    def test_init_multi_client_requires_yes_and_mutates_nothing(self) -> None:
+        home_before = tree(self.home)
+        for args in (
+            ("init",),
+            ("init", "--client", "claude", "--client", "codex"),
+        ):
+            with self.subTest(args=args):
+                res = self.cli(*args)
+                self.assertEqual(res.returncode, 2, (res.stdout, res.stderr))
+                self.assertIn("--yes", res.stderr)
+                self.assertIn("--dry-run", res.stderr)
+                self.assertEqual(tree(self.home), home_before)
+                self.assertEqual(self.registry.roots(), ())
+                self.assertFalse(self.registry.config_path.exists())
+
+        res_json = self.cli("init", "--json")
+        self.assertEqual(res_json.returncode, 2)
+        self.assertEqual(res_json.stderr, "")
+        payload = json.loads(res_json.stdout)
+        self.assertEqual(payload["schema_version"], 1)
+        self.assertEqual(payload["reason"], "usage")
+        self.assertIn("--yes", payload["message"])
+        self.assertEqual(tree(self.home), home_before)
+        self.assertFalse(self.registry.config_path.exists())
+
+        # Duplicate single-client flag resolves to 1 client and works without --yes.
+        single_dup = self.cli("init", "--client", "claude", "--client", "claude")
+        self.assertEqual(single_dup.returncode, 0, single_dup.stderr)
+        self.assertEqual(self.registry.roots(), (self.root,))
+        self.assertEqual(len(self.installed(self.claude, "PreToolUse")), 1)
+        self.assertEqual(json.loads(self.codex.read_text()), CODEX_HOOKS)
+
+    def test_init_dry_run_previews_files_and_diffs_without_mutating(self) -> None:
+        home_before = tree(self.home)
+
+        res_all = self.cli("init", "--dry-run")
+        self.assertEqual(res_all.returncode, 0, res_all.stderr)
+        for path in (
+            self.claude, self.codex, self.plugins / "coldrewind.js",
+            self.cursor, self.antigravity, self.gemini,
+        ):
+            self.assertIn(str(path), res_all.stdout)
+        self.assertIn("@@", res_all.stdout)
+        self.assertIn("Dry run: no files were changed", res_all.stdout)
+        self.assertIn("--yes", res_all.stdout)
+        self.assertEqual(tree(self.home), home_before)
+        self.assertEqual(self.registry.roots(), ())
+        self.assertFalse(self.registry.config_path.exists())
+
+        res_one = self.cli("init", "--client", "claude", "--dry-run", "--json")
+        self.assertEqual(res_one.returncode, 0, res_one.stderr)
+        self.assertEqual(res_one.stderr, "")
+        data = json.loads(res_one.stdout)
+        self.assertEqual(data["schema_version"], 1)
+        self.assertTrue(data["dry_run"])
+        self.assertEqual(data["updated"], [])
+        self.assertEqual(len(data["planned"]), 1)
+        self.assertEqual(data["planned"][0]["client"], "claude")
+        self.assertEqual(data["planned"][0]["path"], str(self.claude.resolve()))
+        self.assertIn("hook claude pre", data["planned"][0]["diff"])
+        self.assertIn("PostToolUse", data["planned"][0]["diff"])
+        self.assertEqual(tree(self.home), home_before)
+        self.assertFalse(self.registry.config_path.exists())
+
+    def test_doctor_checks_installed_hooks_and_detects_broken_paths(self) -> None:
+        # Before init (even with foreign hooks present): all 6 clients are not_installed, ok=True, exit 0.
+        before = self.cli("doctor", "--json")
+        self.assertEqual(before.returncode, 0, before.stderr)
+        data = json.loads(before.stdout)
+        self.assertTrue(data["ok"])
+        self.assertEqual(data["registered_workspaces"], 0)
+        self.assertIsNone(data["registry_error"])
+        self.assertEqual([c["status"] for c in data["clients"]], ["not_installed"] * 6)
+
+        # After init --yes: all 6 clients are ok and resolve to executable python + package root.
+        self.assertEqual(self.cli("init", "--yes").returncode, 0)
+        after = self.cli("doctor", "--json")
+        self.assertEqual(after.returncode, 0, after.stderr)
+        data = json.loads(after.stdout)
+        self.assertTrue(data["ok"])
+        self.assertEqual(data["registered_workspaces"], 1)
+        self.assertEqual([c["status"] for c in data["clients"]], ["ok"] * 6)
+        for client_entry in data["clients"]:
+            self.assertTrue(client_entry["hooks"])
+            for hook_entry in client_entry["hooks"]:
+                self.assertTrue(hook_entry["ok"])
+                self.assertIsNotNone(hook_entry["resolved_executable"])
+                self.assertIsNotNone(hook_entry["package_root"])
+
+        plain = self.cli("doctor")
+        self.assertEqual(plain.returncode, 0, plain.stderr)
+        self.assertIn("claude: ok", plain.stdout)
+        self.assertIn("opencode: ok", plain.stdout)
+
+        # 1. Missing venv python binary in Claude hook -> BROKEN, exit 1.
+        claude_data = json.loads(self.claude.read_text())
+        missing_python = str(self.home / "deleted-venv" / "bin" / "python")
+        claude_data["hooks"]["PreToolUse"][-1]["hooks"][0]["command"] = (
+            claude_data["hooks"]["PreToolUse"][-1]["hooks"][0]["command"].replace(
+                sys.executable, missing_python, 1
+            )
+        )
+        self.claude.write_text(json.dumps(claude_data))
+        broken = self.cli("doctor", "--client", "claude", "--json")
+        self.assertEqual(broken.returncode, 1)
+        broken_data = json.loads(broken.stdout)
+        self.assertFalse(broken_data["ok"])
+        self.assertEqual(broken_data["clients"][0]["status"], "broken")
+        self.assertIn("executable not found", broken_data["clients"][0]["error"])
+        self.assertIn(missing_python, broken_data["clients"][0]["error"])
+
+        broken_plain = self.cli("doctor", "--client", "claude")
+        self.assertEqual(broken_plain.returncode, 1)
+        self.assertIn("claude: BROKEN", broken_plain.stdout)
+        self.assertIn(missing_python, broken_plain.stdout)
+
+        # 2. Non-executable file as hook binary -> BROKEN, exit 1.
+        not_exec = self.home / "not-exec-python"
+        not_exec.write_text("#!/bin/sh\n")
+        not_exec.chmod(0o644)
+        claude_data["hooks"]["PreToolUse"][-1]["hooks"][0]["command"] = (
+            claude_data["hooks"]["PreToolUse"][-1]["hooks"][0]["command"].replace(
+                missing_python, str(not_exec), 1
+            )
+        )
+        self.claude.write_text(json.dumps(claude_data))
+        non_exec_res = self.cli("doctor", "--client", "claude", "--json")
+        self.assertEqual(non_exec_res.returncode, 1)
+        self.assertIn("not executable", json.loads(non_exec_res.stdout)["clients"][0]["error"])
+
+        # 3. Valid python executable, but moved/deleted package root -> BROKEN, exit 1.
+        missing_pkg = str(self.home / "moved-checkout")
+        bad_code = (
+            f"import sys; sys.path.insert(0, {missing_pkg!r}); "
+            "from coldrewind.cli import main; sys.exit(main())"
+        )
+        claude_data["hooks"]["PreToolUse"][-1]["hooks"][0]["command"] = shlex.join(
+            [sys.executable, "-I", "-c", bad_code, "hook", "claude", "pre"]
+        )
+        self.claude.write_text(json.dumps(claude_data))
+        pkg_res = self.cli("doctor", "--client", "claude", "--json")
+        self.assertEqual(pkg_res.returncode, 1)
+        self.assertIn("coldrewind package not found", json.loads(pkg_res.stdout)["clients"][0]["error"])
+
+        # 4. Direct coldrewind binary hook (executable vs missing).
+        direct_bin = self.home / "bin" / "coldrewind"
+        direct_bin.parent.mkdir(parents=True)
+        direct_bin.write_text("#!/bin/sh\nexit 0\n")
+        direct_bin.chmod(0o755)
+        self.codex.write_text(json.dumps({
+            "hooks": {
+                "PreToolUse": [{"hooks": [{"type": "command", "command": f"{direct_bin} hook codex pre"}]}],
+                "PostToolUse": [{"hooks": [{"type": "command", "command": f"{direct_bin} hook codex post"}]}],
+            }
+        }))
+        self.assertEqual(self.cli("doctor", "--client", "codex").returncode, 0)
+        direct_bin.unlink()
+        missing_direct = self.cli("doctor", "--client", "codex", "--json")
+        self.assertEqual(missing_direct.returncode, 1)
+        self.assertIn("executable not found", json.loads(missing_direct.stdout)["clients"][0]["error"])
+
+        # 5. Broken OpenCode plugin (missing python) and malformed JSON config.
+        plugin = self.plugins / "coldrewind.js"
+        plugin.write_text(plugin.read_text().replace(json.dumps(sys.executable), json.dumps(missing_python), 1))
+        oc_res = self.cli("doctor", "--client", "opencode", "--json")
+        self.assertEqual(oc_res.returncode, 1)
+        self.assertEqual(json.loads(oc_res.stdout)["clients"][0]["status"], "broken")
+
+        self.cursor.write_text("{not valid json")
+        cur_res = self.cli("doctor", "--client", "cursor", "--json")
+        self.assertEqual(cur_res.returncode, 1)
+        self.assertEqual(json.loads(cur_res.stdout)["clients"][0]["status"], "broken")
+
+    def test_doctor_flags_nondict_handlers_invalid_args_phase_mismatch_and_truncated_plugin(self) -> None:
+        # 1. Non-dict handler entry (e.g. "hooks": [null]) must not crash doctor --json; exits 1 with valid JSON.
+        self.claude.write_text(json.dumps({"hooks": {"PreToolUse": [{"hooks": [None]}]}}))
+        null_res = self.cli("doctor", "--client", "claude", "--json")
+        self.assertEqual(null_res.returncode, 1, (null_res.stdout, null_res.stderr))
+        self.assertEqual(null_res.stderr, "")
+        null_data = json.loads(null_res.stdout)
+        self.assertFalse(null_data["ok"])
+        self.assertEqual(null_data["clients"][0]["status"], "broken")
+        self.assertIn("malformed PreToolUse", null_data["clients"][0]["error"])
+
+        # 2. Invalid --guard mode, unrecognized flag, wrong phase on PreToolUse, and wrong client -> all broken (exit 1).
+        python, _, _, code = init_cmd._launcher()
+        bad_cmds = [
+            (shlex.join([python, "-I", "-c", code, "hook", "claude", "pre", "--guard", "invalid"]), "invalid --guard"),
+            (shlex.join([python, "-I", "-c", code, "hook", "claude", "pre", "--bogus"]), "unrecognized hook option"),
+            (shlex.join([python, "-I", "-c", code, "hook", "claude", "post"]), "hook phase mismatch"),
+            (shlex.join([python, "-I", "-c", code, "hook", "codex", "pre"]), "hook client mismatch"),
+            (f"{shlex.join([python, '-I', '-c', code, 'hook', 'claude', 'pre'])} --guard 'off", "malformed hook command shell syntax"),
+            (shlex.join([python, "-I", "-c", code[:-1], "hook", "claude", "pre"]), "malformed ColdRewind launcher code"),
+            (shlex.join([python, "-I", "-c", code.replace("import main", "import mian"), "hook", "claude", "pre"]), "malformed ColdRewind launcher code"),
+        ]
+        for cmd, needle in bad_cmds:
+            with self.subTest(cmd=cmd):
+                self.claude.write_text(json.dumps({
+                    "hooks": {"PreToolUse": [{"hooks": [{"type": "command", "command": cmd}]}]}
+                }))
+                res = self.cli("doctor", "--client", "claude", "--json")
+                self.assertEqual(res.returncode, 1, (res.stdout, res.stderr))
+                data = json.loads(res.stdout)
+                self.assertFalse(data["ok"])
+                self.assertEqual(data["clients"][0]["status"], "broken")
+                self.assertIn(needle, data["clients"][0]["error"])
+
+        # 2b. Installed Claude config with typo 'import main' -> 'import mian' in PreToolUse (with intact PostToolUse)
+        #     and installed Claude config missing a required event (e.g. PostToolUse removed) -> both broken (exit 1).
+        self.claude.write_text(json.dumps(CLAUDE_SETTINGS))
+        self.assertEqual(self.cli("init", "--client", "claude").returncode, 0)
+        installed_claude = json.loads(self.claude.read_text())
+
+        typo_claude = json.loads(json.dumps(installed_claude))
+        typo_claude["hooks"]["PreToolUse"][-1]["hooks"][0]["command"] = (
+            typo_claude["hooks"]["PreToolUse"][-1]["hooks"][0]["command"].replace("import main", "import mian")
+        )
+        self.claude.write_text(json.dumps(typo_claude))
+        typo_res = self.cli("doctor", "--client", "claude", "--json")
+        self.assertEqual(typo_res.returncode, 1, (typo_res.stdout, typo_res.stderr))
+        typo_data = json.loads(typo_res.stdout)
+        self.assertFalse(typo_data["ok"])
+        self.assertEqual(typo_data["clients"][0]["status"], "broken")
+        self.assertIn("malformed ColdRewind launcher code", typo_data["clients"][0]["error"])
+
+        missing_event_claude = json.loads(json.dumps(installed_claude))
+        del missing_event_claude["hooks"]["PostToolUse"]
+        self.claude.write_text(json.dumps(missing_event_claude))
+        missing_res = self.cli("doctor", "--client", "claude", "--json")
+        self.assertEqual(missing_res.returncode, 1, (missing_res.stdout, missing_res.stderr))
+        missing_data = json.loads(missing_res.stdout)
+        self.assertFalse(missing_data["ok"])
+        self.assertEqual(missing_data["clients"][0]["status"], "broken")
+        self.assertIn("missing required hook event(s): PostToolUse", missing_data["clients"][0]["error"])
+        missing_plain = self.cli("doctor", "--client", "claude")
+        self.assertEqual(missing_plain.returncode, 1)
+        self.assertIn("missing required hook event(s): PostToolUse", missing_plain.stdout)
+
+        # 3. Truncated/corrupted OpenCode plugin (header only, missing trailing '};', corrupted Python launcher, or invalid guardMode) -> broken (exit 1).
+        plugin = self.plugins / "coldrewind.js"
+        for label, body, needle in (
+            ("header-only", f"const [python, code] = {json.dumps([python, code])};\n", "truncated or modified"),
+            ("missing-closing-brace", init_cmd._plugin_text().removesuffix("};\n"), "truncated or modified"),
+            ("corrupted-python-launcher", init_cmd._PLUGIN_DEFAULT % json.dumps([python, code[:-1]]), "malformed ColdRewind launcher code"),
+        ):
+            with self.subTest(opencode=label):
+                plugin.write_text(body)
+                trunc_res = self.cli("doctor", "--client", "opencode", "--json")
+                self.assertEqual(trunc_res.returncode, 1, (trunc_res.stdout, trunc_res.stderr))
+                trunc_data = json.loads(trunc_res.stdout)
+                self.assertFalse(trunc_data["ok"])
+                self.assertEqual(trunc_data["clients"][0]["status"], "broken")
+                self.assertIn(needle, trunc_data["clients"][0]["error"])
+
+        bad_guard_plugin = init_cmd._PLUGIN_GUARDED % json.dumps([python, code, "bogus"])
+        plugin.write_text(bad_guard_plugin)
+        guard_res = self.cli("doctor", "--client", "opencode", "--json")
+        self.assertEqual(guard_res.returncode, 1, (guard_res.stdout, guard_res.stderr))
+        self.assertIn("invalid guard mode", json.loads(guard_res.stdout)["clients"][0]["error"])
+
+    def test_init_dry_run_redacts_existing_secrets_and_env_values(self) -> None:
+        anthropic_secret = "sk-ant-api03-" + "S" * 32
+        custom_env_secret = "super-private-custom-env-value-998877"
+        bearer_secret = "tok_" + "B" * 24 + ".synthetic"
+        settings_with_secrets = {
+            "model": "opus",
+            "apiKeyHelper": f"curl -H 'Authorization: Bearer {bearer_secret}'",
+            "env": {
+                "ANTHROPIC_API_KEY": anthropic_secret,
+                "CUSTOM_INTERNAL_FLAG": custom_env_secret,
+            },
+        }
+        # Test both minified (single-line) and pretty-printed existing configs.
+        for formatted in (
+            json.dumps(settings_with_secrets, separators=(",", ":")),
+            json.dumps(settings_with_secrets, indent=2) + "\n",
+        ):
+            with self.subTest(minified=("\n" not in formatted)):
+                self.claude.write_text(formatted)
+                before = self.claude.read_bytes()
+                plain = self.cli("init", "--client", "claude", "--dry-run")
+                self.assertEqual(plain.returncode, 0, plain.stderr)
+                as_json = self.cli("init", "--client", "claude", "--dry-run", "--json")
+                self.assertEqual(as_json.returncode, 0, as_json.stderr)
+                self.assertEqual(self.claude.read_bytes(), before)
+                for output in (plain.stdout, plain.stderr, as_json.stdout, as_json.stderr):
+                    for secret in (anthropic_secret, custom_env_secret, bearer_secret):
+                        self.assertNotIn(secret, output)
+                parsed = json.loads(as_json.stdout)
+                self.assertIn("PreToolUse", parsed["planned"][0]["diff"])
 
 
 if __name__ == "__main__":

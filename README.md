@@ -6,7 +6,7 @@ a command with `coldrewind run --`.
 Inspect the changes, undo a captured step, and redo it when needed.
 
 - Zero third-party runtime dependencies (Python 3.11+ standard library)
-- Zero cloud services, zero outbound network calls, zero persistent daemon
+- No telemetry. Zero network calls. Zero cloud services, zero persistent daemon.
 - Restores what Git misses: uncommitted edits, untracked files, staged index state, binaries, permissions, symlinks, local SQLite files, and Git refs
 
 ## Install and capture your first change
@@ -46,9 +46,23 @@ edit. Run `coldrewind log` in the workspace to find the step ID, then run
 
 `init` registers the current directory and installs user-level hooks for the
 selected clients. The hooks apply across all registered workspaces for those
-clients. Both `init` and `uninstall` select all six clients by default.
-Repeat `--client` to select more than one. Pass `--guard checkpoint|block|off`
-to `init` to pin a pre-tool guard mode in the installed hooks.
+clients. Repeat `--client` to select more than one; omitting `--client` targets
+all six clients. Preview exact file paths and diffs first with `--dry-run`
+(writes nothing and does not register the workspace). Editing more than one
+client config requires `--yes` (`coldrewind init --yes`), while a single
+`--client <name>` runs directly. Pass `--guard checkpoint|block|off` to `init`
+to pin a pre-tool guard mode in the installed hooks.
+
+```sh
+coldrewind init --dry-run
+coldrewind init --yes
+coldrewind doctor
+```
+
+Run `coldrewind doctor` (or `coldrewind doctor --json`) at any time to verify
+that installed hooks resolve to an executable Python/CLI binary and valid
+ColdRewind package path. It exits `0` when all installed hooks resolve (or none
+are installed yet) and `1` if an installed hook or the registry is broken.
 
 | Client | Default path | Entries installed by `init` and removed by `uninstall` |
 | --- | --- | --- |
@@ -105,6 +119,45 @@ client across previously registered workspaces.
 To remove the CLI as well, first remove every client hook you installed, then run
 `uv tool uninstall coldrewind`. The hooks refer to the installation that created
 them, so remove them before moving or removing that installation.
+
+## What gets stored
+
+ColdRewind writes everything locally under `~/.local/state/coldrewind` (or
+`$XDG_STATE_HOME/coldrewind`, `0700` directories)—outside your repository—with a
+default per-workspace retention budget of 500 MiB and 7 days. Snapshots keep
+content-addressed file blobs (including `.env` files) locally so `undo` and
+`redo` can restore them byte-for-byte, while the SQLite timeline ledger stores
+only redacted command summaries (e.g., `bash [REDACTED]`). `coldrewind log` and
+`coldrewind diff` redact `.env*` values, private keys, `Authorization: Bearer`/`Basic`
+headers, known provider token prefixes (`sk-`, `ghp_`/`github_pat_`, `glpat-`,
+`xox*-`, `AKIA`, `AIza`), and secret/token/password assignments and CLI flags as
+`[REDACTED]` (and omit `.git/logs/` patches) unless you explicitly pass
+`--show-secrets` to `diff`.
+
+```text
+$ coldrewind log
+1 2026-11-26T15:00:00+00:00 Claude Code partial bash [REDACTED]
+
+$ coldrewind diff 1
+--- /dev/null
++++ b/.env
+@@ -0,0 +1 @@
++APP_ENV=[REDACTED]
+--- a/notes.txt
++++ b/notes.txt
+@@ -1 +1 @@
+-before
++after
+added: .env
+modified: notes.txt
+```
+
+In `log` output, `partial` means ColdRewind captured local workspace changes—so
+`coldrewind undo` can restore those files and Git state—but cannot prove the
+command had no uncaptured side effects (for example, commands run through a
+shell/wrapper like `bash`, privileged or network tools, excluded `.git/objects`
+writes, or hooked tools without local-only proof). `irreversible` means there is
+no restorable local snapshot delta.
 
 ## Limitations
 

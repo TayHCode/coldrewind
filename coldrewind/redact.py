@@ -32,6 +32,9 @@ _ENV_LINE = re.compile(
     r"(?m)^(\s*(?:export\s+)?[A-Za-z_][A-Za-z0-9_.-]*\s*=)"
     r"(?:\s*\"(?:[^\"\\]|\\[\s\S])*\"?|\s*'[^']*'?|[^\n]*)"
 )
+_AUTH_HEADER = re.compile(
+    r"(?i)(authorization[\"']?\s*[:=]\s*[\"']?\s*(?:bearer|basic)[ \t]+)([^\s,;\"']+)"
+)
 _FLAG = r"--?[A-Za-z0-9_-]*(?:token|secret|password|passwd|api[_-]?key|access[_-]?key)[A-Za-z0-9_-]*"
 _FLAG_VALUE = re.compile(rf"(?i)((?<![A-Za-z0-9_-]){_FLAG}[ \t]+)(?:\\\n|[^\n])+")
 
@@ -43,6 +46,7 @@ def is_env_file(path: str) -> bool:
 def redact_text(text: str) -> str:
     text = _PRIVATE_KEY.sub("[REDACTED PRIVATE KEY]", text)
     text = _TOKENS.sub(MASK, text)
+    text = _AUTH_HEADER.sub(lambda match: match.group(1) + MASK, text)
     text = _FLAG_VALUE.sub(lambda match: match.group(1) + MASK, text)
     return _ASSIGNMENT.sub(lambda match: match.group(1) + MASK, text)
 

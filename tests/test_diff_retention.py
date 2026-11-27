@@ -132,6 +132,22 @@ class SecretSafeDiffTest(Workspace):
         redact_text("-" * 100_000)
         self.assertLess(time.perf_counter() - start, 2)
 
+    def test_authorization_bearer_and_basic_headers_are_redacted(self) -> None:
+        bearer_secret = "tok_" + "B" * 24 + ".synthetic"
+        basic_secret = "dXNlcjp" + "Z" * 16 + "=="
+        (self.root / "headers.txt").write_text(
+            f"Authorization: Bearer {bearer_secret}\n"
+            f'"Authorization": "Basic {basic_secret}"\n'
+            "note: bearer token documentation stays readable\n"
+        )
+        post = snapshot.take(self.registry, self.root)
+        patch_text = diff(self.registry, self.root, self.pre, post)["patch"]
+        self.assertNotIn(bearer_secret, patch_text)
+        self.assertNotIn(basic_secret, patch_text)
+        self.assertIn("Authorization: Bearer [REDACTED]", patch_text)
+        self.assertIn('"Authorization": "Basic [REDACTED]"', patch_text)
+        self.assertIn("bearer token documentation stays readable", patch_text)
+
     def test_show_secrets_is_explicit_opt_in(self) -> None:
         patch_text = diff(self.registry, self.root, self.pre, self.post, show_secrets=True)["patch"]
         for secret in SECRETS:

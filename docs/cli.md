@@ -4,8 +4,9 @@ The inspection and restore commands use the nearest registered workspace that co
 
 | Command | Success output with `--json` |
 |---|---|
-| `init [--client CLIENT] [--guard MODE]` | [Updated hook configuration paths](schemas/cli-v1.schema.json#init). Registers the current directory. |
+| `init [--client CLIENT] [--guard MODE] [--dry-run] [--yes]` | [Updated hook configuration paths](schemas/cli-v1.schema.json#init). Registers the current directory. Multi-client edits require `--yes`; `--dry-run` previews planned files and diffs without writing. |
 | `uninstall [--client CLIENT]` | [Updated hook configuration paths](schemas/cli-v1.schema.json#uninstall). Removes user-level hooks for the selected clients and keeps the registry and timeline. |
+| `doctor [--client CLIENT]` | [Hook resolution and environment check](schemas/cli-v1.schema.json#doctor). Verifies installed hooks resolve to an executable binary and package path. Exits `1` if any installed hook or the registry is broken. |
 | `status` | [Backend of the latest snapshot](schemas/cli-v1.schema.json#status), and the last recorded capture error for this workspace. Each field can be `null`. Capture errors are summaries and remain visible after subsequent successful captures. |
 | `log` | [Redacted steps](schemas/cli-v1.schema.json#log) in ascending step ID order. |
 | `diff STEP [--show-secrets]` | [Changed paths and unified patch](schemas/cli-v1.schema.json#diff) between the step's two snapshots. |
@@ -20,7 +21,7 @@ Successful JSON responses contain one object with `schema_version: 1` on stdout.
 | Code | Meaning |
 |---|---|
 | `0` | The command succeeded. |
-| `1` | `conflict` for intervening changes, `ambiguous_restore` for overlapping captures, `pruned_snapshots` for unavailable snapshot data, or `nothing_to_restore` when no step was given and there is no eligible step. |
+| `1` | `conflict` for intervening changes, `ambiguous_restore` for overlapping captures, `pruned_snapshots` for unavailable snapshot data, `nothing_to_restore` when no step was given and there is no eligible step, or a failed `doctor` check. |
 | `2` | `usage` for invalid arguments, `unregistered_workspace` where registration is required, or `local_error` for a local failure such as an unknown step ID or an incomplete step. |
 
 `--force` allows a restore to overwrite intervening changes. A restore still needs both step snapshots. If either manifest is gone, `undo` and `redo` exit `1` before taking a safety snapshot or changing the workspace.

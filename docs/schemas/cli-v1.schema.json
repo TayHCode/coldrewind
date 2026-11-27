@@ -101,6 +101,32 @@
           "items": {
             "type": "string"
           }
+        },
+        "dry_run": {
+          "type": "boolean"
+        },
+        "planned": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "required": [
+              "client",
+              "path",
+              "diff"
+            ],
+            "additionalProperties": false,
+            "properties": {
+              "client": {
+                "type": "string"
+              },
+              "path": {
+                "type": "string"
+              },
+              "diff": {
+                "type": "string"
+              }
+            }
+          }
         }
       },
       "$anchor": "init"
@@ -108,6 +134,119 @@
     "uninstall": {
       "$ref": "#/$defs/init",
       "$anchor": "uninstall"
+    },
+    "doctor": {
+      "type": "object",
+      "required": [
+        "schema_version",
+        "ok",
+        "python",
+        "registered_workspaces",
+        "registry_error",
+        "clients"
+      ],
+      "additionalProperties": false,
+      "properties": {
+        "schema_version": {
+          "const": 1
+        },
+        "ok": {
+          "type": "boolean"
+        },
+        "python": {
+          "type": "string"
+        },
+        "registered_workspaces": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "registry_error": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "clients": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "required": [
+              "client",
+              "path",
+              "status",
+              "hooks",
+              "error"
+            ],
+            "additionalProperties": false,
+            "properties": {
+              "client": {
+                "type": "string"
+              },
+              "path": {
+                "type": "string"
+              },
+              "status": {
+                "enum": [
+                  "ok",
+                  "not_installed",
+                  "broken"
+                ]
+              },
+              "hooks": {
+                "type": "array",
+                "items": {
+                  "type": "object",
+                  "required": [
+                    "event",
+                    "executable",
+                    "resolved_executable",
+                    "package_root",
+                    "ok",
+                    "error"
+                  ],
+                  "additionalProperties": false,
+                  "properties": {
+                    "event": {
+                      "type": "string"
+                    },
+                    "executable": {
+                      "type": "string"
+                    },
+                    "resolved_executable": {
+                      "type": [
+                        "string",
+                        "null"
+                      ]
+                    },
+                    "package_root": {
+                      "type": [
+                        "string",
+                        "null"
+                      ]
+                    },
+                    "ok": {
+                      "type": "boolean"
+                    },
+                    "error": {
+                      "type": [
+                        "string",
+                        "null"
+                      ]
+                    }
+                  }
+                }
+              },
+              "error": {
+                "type": [
+                  "string",
+                  "null"
+                ]
+              }
+            }
+          }
+        }
+      },
+      "$anchor": "doctor"
     },
     "status": {
       "type": "object",

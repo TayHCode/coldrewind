@@ -519,7 +519,7 @@ class TestGuardHooks(unittest.TestCase):
         self.assertEqual(json.loads(res.stdout), {"decision": "allow"})
 
     def test_init_with_guard_flag_pins_and_uninstalls_cleanly(self) -> None:
-        res = self.cli("init", "--guard", "block")
+        res = self.cli("init", "--yes", "--guard", "block")
         self.assertEqual(res.returncode, 0, res.stderr)
 
         cursor_cfg = json.loads((self.home / ".cursor" / "hooks.json").read_text())

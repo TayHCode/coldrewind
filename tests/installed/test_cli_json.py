@@ -18,7 +18,7 @@ from pathlib import Path
 PROJECT = Path(__file__).resolve().parents[2]
 SCHEMAS = json.loads((PROJECT / "docs/schemas/cli-v1.schema.json").read_text())["$defs"]
 VERSION = tomllib.loads((PROJECT / "pyproject.toml").read_text())["project"]["version"]
-TYPES = {"object": dict, "array": list, "string": str, "integer": int, "null": type(None)}
+TYPES = {"object": dict, "array": list, "string": str, "integer": int, "boolean": bool, "null": type(None)}
 BLOCK_SOCKETS = """
 import os
 import sys
@@ -170,7 +170,7 @@ class InstalledCLI(unittest.TestCase):
         original_configs = {path: path.read_bytes() for path in (*configs, other)}
         plugin = other.with_name("coldrewind.js")
 
-        crw("init")
+        crw("init", "--yes")
         self.assertTrue(plugin.is_file())
         crw("status")
         states = [fingerprint(root)]
@@ -290,10 +290,13 @@ class InstalledCLI(unittest.TestCase):
         if "minimum" in schema:
             self.assertGreaterEqual(value, schema["minimum"])
         if "properties" in schema:
-            self.assertEqual(set(value), set(schema["required"]))
+            self.assertTrue(set(schema["required"]) <= set(value), (schema["required"], list(value)))
+            if schema.get("additionalProperties") is False:
+                self.assertTrue(set(value) <= set(schema["properties"]), (list(value), list(schema["properties"])))
             for key, member in schema["properties"].items():
-                with self.subTest(field=key):
-                    self.assert_schema(value[key], member)
+                if key in value:
+                    with self.subTest(field=key):
+                        self.assert_schema(value[key], member)
         if "items" in schema:
             for member in value:
                 self.assert_schema(member, schema["items"])
@@ -369,7 +372,7 @@ else:
 
     def test_installed_lifecycle(self):
         self.assertEqual(self.cli("--version").stdout, f"coldrewind {VERSION}\n")
-        updated = self.as_json("init")["updated"]
+        updated = self.as_json("init", "--yes")["updated"]
         self.assertEqual(len(updated), 6)
         self.assertTrue(all(Path(path).is_file() for path in updated))
         status = self.as_json("status")
@@ -470,7 +473,7 @@ else:
             self.assert_error(result, "local_error", "step has no snapshots")
 
     def test_pruned_undo_refuses_without_writes(self):
-        self.as_json("init")
+        self.as_json("init", "--yes")
         for text in ("one", "two", "three"):
             self.write_step(text)
         first = self.as_json("log")["steps"][0]
@@ -502,7 +505,7 @@ else:
         self.assertEqual(files(), before)
 
     def test_whole_store_retention(self):
-        self.as_json("init")
+        self.as_json("init", "--yes")
         cap = 64 * 1024
         self.env.update(COLDREWIND_MAX_BYTES=str(cap), COLDREWIND_MAX_AGE_SECONDS="60")
         for index in range(20):
@@ -545,7 +548,7 @@ else:
               "active markers=1, expired markers=0")
 
     def test_redo_survives_retention_after_later_steps(self):
-        self.as_json("init")
+        self.as_json("init", "--yes")
         self.write_step("one")
         self.write_step("two")
         undone = self.as_json("undo")["step"]
@@ -567,7 +570,7 @@ else:
         self.launch(["git", "add", "note.txt"]).check_returncode()
         self.launch(["git", "commit", "-qm", "base"]).check_returncode()
 
-        self.as_json("init", "--client", "cursor", "--client", "antigravity", "--client", "gemini")
+        self.as_json("init", "--yes", "--client", "cursor", "--client", "antigravity", "--client", "gemini")
         # Baseline snapshot, then edit uncommitted work under an aggressive throttle.
         self.write_step("baseline")
         note.write_text("precious uncommitted\n")
@@ -617,3 +620,44 @@ else:
         self.assertEqual(json.loads(gem_res.stdout)["decision"], "deny")
 
         self.as_json("uninstall", "--client", "cursor", "--client", "antigravity", "--client", "gemini")
+
+    def test_installed_init_safety_and_doctor_json(self):
+        # Multi-client init without --yes is refused cleanly without mutating HOME or registry.
+        refused = self.cli("init", "--json", code=2)
+        self.assert_error(refused, "usage", "--yes")
+        self.assertEqual(list(self.home.iterdir()), [])
+
+        # Dry run previews all 6 clients, validates schema, and leaves HOME untouched.
+        preview = self.as_json("init", "--dry-run")
+        self.assertTrue(preview["dry_run"])
+        self.assertEqual(preview["updated"], [])
+        self.assertEqual(len(preview["planned"]), 6)
+        self.assertTrue(all(item["diff"] for item in preview["planned"]))
+        self.assertEqual(list(self.home.iterdir()), [])
+
+        # Doctor works on a fresh HOME before init.
+        doc_before = self.as_json("doctor")
+        self.assertTrue(doc_before["ok"])
+        self.assertEqual([c["status"] for c in doc_before["clients"]], ["not_installed"] * 6)
+
+        # Install all clients with --yes, verify doctor passes.
+        self.as_json("init", "--yes")
+        doc_ok = self.as_json("doctor")
+        self.assertTrue(doc_ok["ok"])
+        self.assertEqual([c["status"] for c in doc_ok["clients"]], ["ok"] * 6)
+
+        # Break Claude's hook binary path and verify doctor exits 1 with valid JSON schema.
+        claude_cfg = self.home / ".claude/settings.json"
+        cfg = json.loads(claude_cfg.read_text())
+        cfg["hooks"]["PreToolUse"][0]["hooks"][0]["command"] = cfg["hooks"]["PreToolUse"][0]["hooks"][0]["command"].replace(
+            str(self.python), "/nonexistent/venv/bin/python", 1
+        )
+        claude_cfg.write_text(json.dumps(cfg))
+        broken = self.cli("doctor", "--json", code=1)
+        self.assertEqual(broken.stderr, "")
+        doc_broken = json.loads(broken.stdout)
+        self.assert_schema(doc_broken, SCHEMAS["doctor"])
+        self.assertFalse(doc_broken["ok"])
+        claude_status = next(c for c in doc_broken["clients"] if c["client"] == "claude")
+        self.assertEqual(claude_status["status"], "broken")
+        self.assertIn("/nonexistent/venv/bin/python", claude_status["error"])

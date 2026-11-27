@@ -46,12 +46,16 @@ class Registry:
             self._check_root(root.resolve())
         return roots
 
-    def register(self, root: Path) -> Path:
+    def validate_root(self, root: Path) -> Path:
         root = root.resolve(strict=True)
         if not root.is_dir():
             raise ValueError("watched root must be a directory")
         self._check_root(root)
         self.roots()
+        return root
+
+    def register(self, root: Path) -> Path:
+        root = self.validate_root(root)
         self._state_path(self.state_dir).mkdir(mode=0o700, parents=True, exist_ok=True)
         with file_lock(self.state_dir / "registry.lock"):
             roots = self.roots()

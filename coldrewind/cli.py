@@ -20,6 +20,7 @@ from coldrewind.runner import run, workspace_root
 JSON_COMMANDS = (
     ("init", "Watch this workspace and install agent hooks"),
     ("uninstall", "Remove ColdRewind agent hooks"),
+    ("doctor", "Check installed agent hooks and local environment"),
     ("status", "Show the backend of the latest stored snapshot"),
     ("log", "Show recorded steps"),
     ("diff", "Show what changed in a step"),
@@ -71,15 +72,24 @@ def build_parser(*, json_errors: bool = False) -> argparse.ArgumentParser:
     for name, help_text in JSON_COMMANDS:
         command = commands.add_parser(name, help=help_text)
         command.add_argument("--json", action="store_true", help="Emit versioned JSON")
-        if name in ("init", "uninstall"):
+        if name in ("init", "uninstall", "doctor"):
             command.add_argument(
                 "--client", action="append", choices=tuple(hooks.AGENTS), dest="clients",
-                help="client to change (repeatable; default: all)",
+                help="client to check (repeatable; default: all)" if name == "doctor"
+                else "client to change (repeatable; default: all)",
             )
         if name == "init":
             command.add_argument(
                 "--guard", choices=guard.MODES, default=None,
                 help="pin guard mode in installed hooks (checkpoint, block, or off)",
+            )
+            command.add_argument(
+                "--dry-run", action="store_true",
+                help="show planned config files and diff without writing files",
+            )
+            command.add_argument(
+                "-y", "--yes", action="store_true", dest="yes",
+                help="confirm editing multiple client configs",
             )
         if name in ("diff", "undo", "redo"):
             command.add_argument("step", type=int, nargs=None if name == "diff" else "?")
@@ -194,18 +204,75 @@ def main(argv: list[str] | None = None) -> int:
         if name == "hook":
             return hooks.main(registry, args.client, args.phase, sys.stdin, guard_mode=args.guard)
         cwd = Path.cwd()
-        if name in ("init", "uninstall"):
+        if name == "init":
             clients = tuple(args.clients or hooks.AGENTS)
-            changed = (
-                init_cmd.init(registry, Path.home(), cwd, clients, guard_mode=args.guard)
-                if name == "init" else init_cmd.uninstall(Path.home(), clients)
-            )
+            if args.dry_run:
+                planned = init_cmd.plan_init(
+                    registry, Path.home(), cwd, clients, guard_mode=args.guard,
+                )
+                lines: list[str] = []
+                for item in planned:
+                    lines.append(f"would update {item.path}")
+                    lines.extend(item.diff.splitlines())
+                if not planned:
+                    lines.append("Dry run: no config files would be changed.")
+                elif len(dict.fromkeys(clients)) > 1:
+                    lines.append("Dry run: no files were changed. Re-run with --yes to apply.")
+                else:
+                    lines.append("Dry run: no files were changed.")
+                _print(
+                    args,
+                    {
+                        "dry_run": True,
+                        "updated": [],
+                        "planned": [
+                            {"client": item.client, "path": str(item.path), "diff": item.diff}
+                            for item in planned
+                        ],
+                    },
+                    lines,
+                )
+            else:
+                changed = init_cmd.init(
+                    registry, Path.home(), cwd, clients, guard_mode=args.guard, yes=args.yes,
+                )
+                _print(args, {"updated": [str(path) for path in changed]}, [f"updated {path}" for path in changed])
+        elif name == "uninstall":
+            clients = tuple(args.clients or hooks.AGENTS)
+            changed = init_cmd.uninstall(Path.home(), clients)
             _print(args, {"updated": [str(path) for path in changed]}, [f"updated {path}" for path in changed])
+        elif name == "doctor":
+            clients = tuple(args.clients) if args.clients else None
+            report = init_cmd.doctor(registry, Path.home(), clients)
+            lines = [f"Python: {report['python']}"]
+            if report["registry_error"]:
+                lines.append(f"Registry: BROKEN ({report['registry_error']})")
+            else:
+                lines.append(f"Registered workspaces: {report['registered_workspaces']}")
+            for entry in report["clients"]:
+                if entry["status"] == "ok":
+                    lines.append(f"{entry['client']}: ok ({entry['path']}, {len(entry['hooks'])} hook(s))")
+                elif entry["status"] == "not_installed":
+                    lines.append(f"{entry['client']}: not installed ({entry['path']})")
+                else:
+                    lines.append(f"{entry['client']}: BROKEN ({entry['path']})")
+                    broken_hooks = [hook for hook in entry["hooks"] if not hook["ok"]]
+                    for hook in broken_hooks:
+                        lines.append(f"  {hook['event']}: {hook['error']}")
+                    if entry["error"]:
+                        hook_errors = {hook["error"] for hook in broken_hooks}
+                        for part in entry["error"].split("; "):
+                            if part not in hook_errors:
+                                lines.append(f"  {part}")
+            _print(args, report, lines)
+            return 0 if report["ok"] else 1
         else:
             root = workspace_root(registry, cwd)
             if root is None:
                 raise UnregisteredWorkspace("current directory is outside registered workspaces")
             _workspace_command(args, registry, root)
+    except init_cmd.MultiClientConfirmationRequired as error:
+        return _error(name, "usage", str(error), 2, as_json=getattr(args, "json", False))
     except (NothingToRestore, restore.Conflict, restore.PrunedSnapshots, restore.AmbiguousRestore) as error:
         reason = {
             NothingToRestore: "nothing_to_restore",
